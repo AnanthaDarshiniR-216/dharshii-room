@@ -5,74 +5,57 @@ const { Server } = require("socket.io");
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "20mb" }));
 
 const server = http.createServer(app);
-
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] },
+  maxHttpBufferSize: 20 * 1024 * 1024
 });
 
-// ─── In-memory rooms ───────────────────────────────────────────────
 const rooms = {};
 
-function generateRoomCode(length = 6) {
+function generateRoomCode() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < length; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
+  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-// ─── REST endpoints ───────────────────────────────────────────────
+function getISTTime() {
+  return new Date().toLocaleTimeString("en-IN", {
+    hour: "2-digit", minute: "2-digit",
+    hour12: true, timeZone: "Asia/Kolkata"
+  });
+}
 
-// Create a new room
 app.post("/create-room", (req, res) => {
   const { password = "", hostName = "Host" } = req.body;
-
   let roomCode;
   do { roomCode = generateRoomCode(); } while (rooms[roomCode]);
-
   rooms[roomCode] = {
-    password,
-    hostName,
-    users: [],
-    messages: [],
+    password, hostName,
+    users: [], messages: [],
     typingUsers: new Set(),
+    seenBy: {},
     createdAt: Date.now()
   };
-
   res.json({ roomCode });
 });
 
-// Check room + validate password
 app.post("/check-room", (req, res) => {
   const { roomCode, password = "" } = req.body;
   const room = rooms[roomCode?.toUpperCase()];
-
   if (!room) return res.json({ exists: false, message: "Room not found" });
   if (room.password && room.password !== password)
     return res.json({ exists: true, passwordValid: false, message: "Wrong password" });
-
   return res.json({ exists: true, passwordValid: true, hostName: room.hostName });
 });
 
-// Health check
-app.get("/", (req, res) => res.send("Dharshii Room Server is running 💜"));
-
-// ─── Socket.IO ───────────────────────────────────────────────────
+app.get("/", (req, res) => res.send("Dharshii Room Server 💜"));
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
-
   socket.on("join_room", ({ roomCode, username, password = "" }) => {
     const code = roomCode?.toUpperCase();
     const room = rooms[code];
-
     if (!room) { socket.emit("room_error", "Room does not exist"); return; }
     if (room.password && room.password !== password) {
       socket.emit("room_error", "Invalid room password"); return;
@@ -87,31 +70,117 @@ io.on("connection", (socket) => {
     socket.emit("previous_messages", room.messages);
 
     const systemMsg = {
+      id: Date.now() + Math.random(),
       username: "System",
-      message: `${username} joined the room`,
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      message: `${username} joined`,
+      time: getISTTime(),
+      type: "system"
     };
     room.messages.push(systemMsg);
-
     io.to(code).emit("receive_message", systemMsg);
     io.to(code).emit("room_users", room.users);
     io.to(code).emit("typing_users", Array.from(room.typingUsers));
+
+    // Mark all existing messages as seen for this user
+    io.to(code).emit("seen_update", { seenBy: room.users });
   });
 
-  socket.on("send_message", ({ roomCode, username, message }) => {
+  // Send text message
+  socket.on("send_message", ({ roomCode, username, message, replyTo = null }) => {
     const room = rooms[roomCode];
     if (!room) return;
-
     const msgData = {
-      username,
-      message,
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      id: Date.now() + Math.random(),
+      username, message,
+      time: getISTTime(),
+      type: "text",
+      replyTo,
+      reactions: {},
+      edited: false,
+      deleted: false,
+      seenBy: [username]
     };
     room.messages.push(msgData);
     room.typingUsers.delete(username);
-
     io.to(roomCode).emit("typing_users", Array.from(room.typingUsers));
     io.to(roomCode).emit("receive_message", msgData);
+  });
+
+  // Send file/image
+  socket.on("send_file", ({ roomCode, username, fileName, fileType, fileData, replyTo = null }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    const msgData = {
+      id: Date.now() + Math.random(),
+      username, fileName, fileType, fileData,
+      time: getISTTime(),
+      type: fileType?.startsWith("image/") ? "image" : "file",
+      replyTo,
+      reactions: {},
+      edited: false,
+      deleted: false,
+      seenBy: [username]
+    };
+    room.messages.push(msgData);
+    io.to(roomCode).emit("receive_message", msgData);
+  });
+
+  // Mark messages as seen
+  socket.on("mark_seen", ({ roomCode, username }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    room.messages.forEach(msg => {
+      if (msg.seenBy && !msg.seenBy.includes(username)) {
+        msg.seenBy.push(username);
+      }
+    });
+    io.to(roomCode).emit("seen_update", {
+      seenBy: room.users,
+      messages: room.messages.map(m => ({ id: m.id, seenBy: m.seenBy }))
+    });
+  });
+
+  // React to message
+  socket.on("react_message", ({ roomCode, msgId, username, emoji }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    const msg = room.messages.find(m => m.id === msgId);
+    if (!msg) return;
+    if (!msg.reactions) msg.reactions = {};
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+    const idx = msg.reactions[emoji].indexOf(username);
+    if (idx === -1) {
+      // Remove user from any other reaction first
+      Object.keys(msg.reactions).forEach(e => {
+        msg.reactions[e] = msg.reactions[e].filter(u => u !== username);
+      });
+      msg.reactions[emoji].push(username);
+    } else {
+      msg.reactions[emoji].splice(idx, 1);
+    }
+    io.to(roomCode).emit("message_updated", msg);
+  });
+
+  // Edit message
+  socket.on("edit_message", ({ roomCode, msgId, username, newText }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    const msg = room.messages.find(m => m.id === msgId);
+    if (!msg || msg.username !== username) return;
+    msg.message = newText;
+    msg.edited = true;
+    io.to(roomCode).emit("message_updated", msg);
+  });
+
+  // Delete message
+  socket.on("delete_message", ({ roomCode, msgId, username }) => {
+    const room = rooms[roomCode];
+    if (!room) return;
+    const msg = room.messages.find(m => m.id === msgId);
+    if (!msg || msg.username !== username) return;
+    msg.deleted = true;
+    msg.message = "This message was deleted";
+    io.to(roomCode).emit("message_updated", msg);
   });
 
   socket.on("typing", ({ roomCode, username }) => {
@@ -129,31 +198,20 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    const roomCode = socket.roomCode;
-    const username = socket.username;
-
+    const { roomCode, username } = socket;
     if (roomCode && rooms[roomCode]) {
       const room = rooms[roomCode];
-      room.users = room.users.filter((u) => u !== username);
+      room.users = room.users.filter(u => u !== username);
       room.typingUsers.delete(username);
-
       const systemMsg = {
-        username: "System",
-        message: `${username} left the room`,
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        id: Date.now(), username: "System",
+        message: `${username} left`, time: getISTTime(), type: "system"
       };
       room.messages.push(systemMsg);
-
       io.to(roomCode).emit("receive_message", systemMsg);
       io.to(roomCode).emit("room_users", room.users);
-      io.to(roomCode).emit("typing_users", Array.from(room.typingUsers));
-
-      if (room.users.length === 0) {
-        delete rooms[roomCode];
-        console.log(`Room ${roomCode} deleted (empty)`);
-      }
+      if (room.users.length === 0) { delete rooms[roomCode]; }
     }
-    console.log("User disconnected:", socket.id);
   });
 });
 
