@@ -5,39 +5,25 @@ const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
 export default function Home() {
   const navigate = useNavigate();
-
-  // If friend arrived via invite link (?code=XXXXXX), send them to join page
-  const urlCode =
-    new URLSearchParams(window.location.search).get("code")?.toUpperCase() ||
-    "";
-  if (urlCode) {
-    // Redirect to join flow with code
-    window.history.replaceState({}, "", `/?join=${urlCode}`);
-  }
   const joinCode =
     new URLSearchParams(window.location.search).get("join")?.toUpperCase() ||
     "";
-
   const [hostName, setHostName] = useState("");
   const [roomPass, setRoomPass] = useState("");
   const [creating, setCreating] = useState(false);
-  const [toast, setToast] = useState(null);
-
-  // Join states — only used if arrived via link
   const [joinName, setJoinName] = useState("");
   const [joinPass, setJoinPass] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState("");
-
+  const [toast, setToast] = useState(null);
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2400);
   };
 
-  // Create Room
   const createRoom = async () => {
-    if (!hostName.trim()) return showToast("Enter your name first 👀");
-    if (!roomPass.trim()) return showToast("Set a room password 🔐");
+    if (!hostName.trim()) return showToast("Enter your name 👀");
+    if (!roomPass.trim()) return showToast("Set a password 🔐");
     setCreating(true);
     try {
       const res = await fetch(`${API}/create-room`, {
@@ -54,12 +40,11 @@ export default function Home() {
       sessionStorage.setItem(`gate_${data.roomCode}`, "true");
       navigate(`/room/${data.roomCode}`);
     } catch {
-      showToast("Failed to create room 😢 Is the server running?");
+      showToast("Failed 😢 Is server running?");
     }
     setCreating(false);
   };
 
-  // Join Room (only for friends via invite link)
   const joinRoom = async () => {
     if (!joinName.trim()) return setJoinError("Enter your name 👀");
     if (!joinPass.trim()) return setJoinError("Enter the password 🔐");
@@ -87,7 +72,7 @@ export default function Home() {
       sessionStorage.setItem(`gate_${joinCode}`, "true");
       navigate(`/room/${joinCode}`);
     } catch {
-      setJoinError("Could not connect. Try again 😢");
+      setJoinError("Can't connect 😢");
     }
     setJoining(false);
   };
@@ -101,10 +86,8 @@ export default function Home() {
       </div>
       <div className="noise" />
       {toast && <div className="toast">{toast}</div>}
-
       <div className="page">
         <div className="card">
-          {/* Brand */}
           <div className="brand-row">
             <div className="brand-avatar">👑</div>
             <div>
@@ -115,7 +98,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* ── FRIEND VIEW: arrived via invite link ── */}
           {joinCode ? (
             <>
               <div
@@ -155,7 +137,6 @@ export default function Home() {
                   Enter your name and password to join 💜
                 </div>
               </div>
-
               <label className="field-label">YOUR NAME</label>
               <input
                 className="glass-input"
@@ -164,7 +145,6 @@ export default function Home() {
                 onChange={(e) => setJoinName(e.target.value)}
                 autoFocus
               />
-
               <label className="field-label">ROOM PASSWORD</label>
               <input
                 className="glass-input"
@@ -177,9 +157,7 @@ export default function Home() {
                 }}
                 onKeyDown={(e) => e.key === "Enter" && joinRoom()}
               />
-
               {joinError && <div className="error-msg">{joinError}</div>}
-
               <button
                 className="btn-primary"
                 onClick={joinRoom}
@@ -189,7 +167,6 @@ export default function Home() {
               </button>
             </>
           ) : (
-            /* ── DHARSHII VIEW: create room only ── */
             <>
               <label className="field-label">YOUR NAME</label>
               <input
@@ -198,7 +175,6 @@ export default function Home() {
                 value={hostName}
                 onChange={(e) => setHostName(e.target.value)}
               />
-
               <label className="field-label">SET ROOM PASSWORD</label>
               <input
                 className="glass-input"
@@ -208,7 +184,6 @@ export default function Home() {
                 onChange={(e) => setRoomPass(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && createRoom()}
               />
-
               <button
                 className="btn-primary"
                 onClick={createRoom}
