@@ -5,6 +5,103 @@ import { io } from "socket.io-client";
 const API = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const socket = io(API);
 
+// ── Password Gate Screen ─────────────────────────────────────────
+function PasswordGate({ roomCode, onEnter }) {
+  const [name, setName] = useState("");
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    if (!name.trim()) return setError("Enter your name 👀");
+    if (!pass.trim()) return setError("Enter the room password 🔐");
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`${API}/check-room`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomCode, password: pass.trim() })
+      });
+      const data = await res.json();
+      if (!data.exists)        { setError("Room not found 🔍"); setLoading(false); return; }
+      if (!data.passwordValid) { setError("Wrong password! Ask the host 🔐"); setLoading(false); return; }
+      onEnter(name.trim(), pass.trim());
+    } catch {
+      setError("Can't connect to server 😢");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{
+      minHeight:"100vh", background:"#000",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      padding:"24px", fontFamily:"'Plus Jakarta Sans',sans-serif",
+      position:"relative", overflow:"hidden"
+    }}>
+      {/* bg orbs */}
+      <div style={{position:"fixed",inset:0,background:"radial-gradient(ellipse at 30% 0%,#001a00 0%,#000 60%)",zIndex:0}}/>
+      <div style={{position:"fixed",width:340,height:340,borderRadius:"50%",background:"#00ff44",filter:"blur(110px)",opacity:0.08,top:-80,left:-80,zIndex:0}}/>
+      <div style={{position:"fixed",width:280,height:280,borderRadius:"50%",background:"#00cc33",filter:"blur(110px)",opacity:0.07,bottom:-60,right:-60,zIndex:0}}/>
+
+      <div style={{
+        position:"relative",zIndex:2,width:"100%",maxWidth:420,
+        background:"rgba(0,8,0,0.96)",border:"1px solid rgba(0,255,68,0.18)",
+        borderRadius:28,backdropFilter:"blur(24px)",padding:36,
+        boxShadow:"0 0 60px rgba(0,255,68,0.07)",
+        animation:"fadeUp .4s ease"
+      }}>
+        <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}`}</style>
+
+        {/* brand */}
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:28}}>
+          <div style={{width:52,height:52,borderRadius:"50%",overflow:"hidden",border:"2px solid rgba(0,255,68,0.4)",flexShrink:0}}>
+            <img src="/dp.jpg" alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+          </div>
+          <div>
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:24,fontWeight:800,color:"#00ff44",textShadow:"0 0 14px rgba(0,255,68,0.4)"}}>Dharshii's Room</div>
+            <div style={{color:"#1a6a1a",fontSize:12,marginTop:2}}>🔐 Private • Password required</div>
+          </div>
+        </div>
+
+        {/* room code pill */}
+        <div style={{padding:"8px 14px",borderRadius:12,background:"rgba(0,255,68,0.06)",border:"1px solid rgba(0,255,68,0.14)",marginBottom:22,textAlign:"center"}}>
+          <span style={{color:"#1a6a1a",fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Room Code</span>
+          <div style={{color:"#00ff44",fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,letterSpacing:3,marginTop:2}}>{roomCode}</div>
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:1.4,color:"#1a5a1a",textTransform:"uppercase",marginBottom:7}}>Your Name</div>
+        <input
+          style={{width:"100%",padding:"13px 15px",borderRadius:13,border:"1px solid rgba(0,255,68,0.14)",background:"rgba(0,15,0,0.8)",color:"#c0ffc0",outline:"none",fontSize:14,fontFamily:"inherit",marginBottom:14}}
+          placeholder="Enter your name..."
+          value={name} onChange={e=>setName(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&submit()}
+        />
+
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:1.4,color:"#1a5a1a",textTransform:"uppercase",marginBottom:7}}>Room Password</div>
+        <input
+          type="password"
+          style={{width:"100%",padding:"13px 15px",borderRadius:13,border:"1px solid rgba(0,255,68,0.14)",background:"rgba(0,15,0,0.8)",color:"#c0ffc0",outline:"none",fontSize:14,fontFamily:"inherit"}}
+          placeholder="Enter password..."
+          value={pass} onChange={e=>{setPass(e.target.value);setError("");}}
+          onKeyDown={e=>e.key==="Enter"&&submit()}
+        />
+
+        {error && <div style={{color:"#ff6060",fontSize:13,marginTop:10,textAlign:"center"}}>{error}</div>}
+
+        <button
+          onClick={submit} disabled={loading}
+          style={{width:"100%",marginTop:20,padding:14,borderRadius:13,border:"none",
+            background:"linear-gradient(135deg,#00cc33,#009922)",color:"#000",
+            fontWeight:700,fontSize:15,fontFamily:"inherit",cursor:"pointer",
+            boxShadow:"0 8px 24px rgba(0,255,68,0.2)",opacity:loading?0.6:1}}>
+          {loading ? "Checking..." : "🔓 Enter Room"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const EMOJI_LIST = ["❤️","😂","😮","😢","😡","👍"];
 
 const STYLES = `
@@ -291,8 +388,28 @@ const STYLES = `
 export default function ChatRoom() {
   const { roomCode } = useParams();
   const navigate = useNavigate();
-  const username = localStorage.getItem("username");
-  const roomPassword = localStorage.getItem("roomPassword") || "";
+
+  // ── Gate: always ask name + password when arriving via link ──
+  const [gateCleared, setGateCleared] = useState(() => {
+    // Only skip gate if already verified this session
+    return sessionStorage.getItem(`gate_${roomCode}`) === "true";
+  });
+  const [username, setUsername] = useState(() => localStorage.getItem("username") || "");
+  const [roomPassword, setRoomPassword] = useState(() => localStorage.getItem("roomPassword") || "");
+
+  const handleGateEnter = (name, pass) => {
+    localStorage.setItem("username", name);
+    localStorage.setItem("roomPassword", pass);
+    sessionStorage.setItem(`gate_${roomCode}`, "true");
+    setUsername(name);
+    setRoomPassword(pass);
+    setGateCleared(true);
+  };
+
+  // Show gate if not cleared
+  if (!gateCleared) {
+    return <PasswordGate roomCode={roomCode} onEnter={handleGateEnter} />;
+  }
 
   const [chat, setChat] = useState([]);
   const [users, setUsers] = useState([]);
